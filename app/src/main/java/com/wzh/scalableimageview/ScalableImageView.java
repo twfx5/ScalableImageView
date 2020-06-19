@@ -9,6 +9,7 @@ import android.util.AttributeSet;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
+import android.widget.OverScroller;
 
 import androidx.annotation.Nullable;
 import androidx.core.view.GestureDetectorCompat;
@@ -16,7 +17,7 @@ import androidx.core.view.GestureDetectorCompat;
 /**
  * 支持缩放和双向滚到的ImageView
  */
-public class ScalableImageView extends View implements GestureDetector.OnGestureListener, GestureDetector.OnDoubleTapListener {
+public class ScalableImageView extends View implements GestureDetector.OnGestureListener, GestureDetector.OnDoubleTapListener, Runnable {
     private Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final float IMAGE_WIDTH = Utils.dp2px(300); // 图片宽度
     private static final float SCALE = 1.5f; // 放大系数
@@ -24,8 +25,12 @@ public class ScalableImageView extends View implements GestureDetector.OnGesture
     private Bitmap bitmap;
     private float smallScale;
     private float bigScale;
-    private float offSetX;
-    private float offSetY;
+    private float originalOffSetX; // 初始偏移x
+    private float originalOffSetY; // 初始偏移y
+
+    // 手指滑动偏移
+    private float offsetX;
+    private float offsetY;
 
     private boolean isBig; // 是否放大了
     private float currentScale; // 属性动画改变的缩放
@@ -34,12 +39,18 @@ public class ScalableImageView extends View implements GestureDetector.OnGesture
     // 手势控制器，Compat表示支持低版本
     private GestureDetectorCompat gesture;
 
+    // OverScroller与Scroller的区别：
+    // 1 Scroller初始速度下降的很快
+    // 2 可以设置过度滚动的距离，8个参数的方法的最后两个参数
+    private OverScroller scroller;
+
     public ScalableImageView(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
         bitmap = Utils.getAvatar(getResources(), (int) IMAGE_WIDTH);
         gesture = new GestureDetectorCompat(context, this);
         // 设置双击监听，源码中已经设置了，可以不写
 //        gesture.setOnDoubleTapListener(this);
+        scroller = new OverScroller(context);
     }
 
     // onSizeChanged这时尺寸已经测量完毕
@@ -56,8 +67,8 @@ public class ScalableImageView extends View implements GestureDetector.OnGesture
         }
 
         // 除以2f也是为了保留小数位
-        offSetX = (getWidth() - bitmap.getWidth()) / 2f;
-        offSetY = (getHeight() - bitmap.getHeight()) / 2f;
+        originalOffSetX = (getWidth() - bitmap.getWidth()) / 2f;
+        originalOffSetY = (getHeight() - bitmap.getHeight()) / 2f;
     }
 
     private float getCurrentScale() {
@@ -80,9 +91,11 @@ public class ScalableImageView extends View implements GestureDetector.OnGesture
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
+        canvas.translate(offsetX, offsetY);
         float scale = smallScale + (bigScale - smallScale) * currentScale; // 当前缩放程度
+        // 以屏幕中点为原点，做缩放，否则缩放后不会居中
         canvas.scale(scale, scale, getWidth() / 2f, getHeight() / 2f);
-        canvas.drawBitmap(bitmap, offSetX , offSetY, paint);
+        canvas.drawBitmap(bitmap, originalOffSetX, originalOffSetY, paint);
     }
 
     @Override
@@ -110,8 +123,18 @@ public class ScalableImageView extends View implements GestureDetector.OnGesture
     }
 
     @Override
-    public boolean onScroll(MotionEvent motionEvent, MotionEvent motionEvent1, float v, float v1) {
+    public boolean onScroll(MotionEvent motionEvent, MotionEvent motionEvent1, float scrollX, float scrollY) {
         // 相当于MotionEvent.Action_MOVE，手指移动时调用
+        // scrollX，scrollY都是前一个点 减去 当前点
+        if (isBig) {
+            offsetX -= scrollX;
+            offsetY -= scrollY;
+            offsetX = Math.min(offsetX, (bitmap.getWidth() * bigScale - getWidth()) / 2); // 最大值是正
+            offsetX = Math.max(offsetX, -(bitmap.getWidth() * bigScale - getWidth()) / 2); // 最小值是负
+            offsetY = Math.min(offsetY, (bitmap.getHeight() * bigScale - getHeight()) / 2);
+            offsetY = Math.max(offsetY, -(bitmap.getHeight() * bigScale - getHeight()) / 2);
+            invalidate();
+        }
         return false;
     }
 
@@ -121,8 +144,18 @@ public class ScalableImageView extends View implements GestureDetector.OnGesture
     }
 
     @Override
-    public boolean onFling(MotionEvent motionEvent, MotionEvent motionEvent1, float v, float v1) {
-        // 手指快速滑动
+    public boolean onFling(MotionEvent motionEvent, MotionEvent motionEvent1, float velocityX, float velocityY) {
+        // 当手指快速滑动结束后，如果速度达到一定值，调用一次这个方法onFling
+        if (isBig) {
+            // scroller相当于一个计算器，它只是负责计算，不能做动画
+            // (int startX, int startY, int velocityX, int velocityY, int minX, int maxX, int minY, int maxY)
+            scroller.fling((int) offsetX, (int) offsetY,
+                    (int) velocityX, (int) velocityY,
+                    (int) -(bitmap.getWidth() * bigScale - getWidth()) / 2, (int) (bitmap.getWidth() * bigScale - getWidth()) / 2,
+                    (int) -(bitmap.getHeight() * bigScale - getHeight()) / 2, (int) (bitmap.getHeight() * bigScale - getHeight()) / 2);
+            // postOnAnimation 让run()里面的方法在下一帧执行，可以不写ObjectAnimator而执行动画
+            postOnAnimation(this);
+        }
         return false;
     }
 
@@ -148,5 +181,18 @@ public class ScalableImageView extends View implements GestureDetector.OnGesture
     public boolean onDoubleTapEvent(MotionEvent motionEvent) {
         // 双击发生后，其他后续事件（比如滑动）在这里处理
         return false;
+    }
+
+    // 刷新界面
+    @Override
+    public void run() {
+        //scroller.computeScrollOffset(); // 计算
+        // 动画没执行完时，继续动画
+        if (scroller.computeScrollOffset()) {
+            offsetX = scroller.getCurrX();
+            offsetY = scroller.getCurrY();
+            invalidate();
+            postOnAnimation(this);
+        }
     }
 }
