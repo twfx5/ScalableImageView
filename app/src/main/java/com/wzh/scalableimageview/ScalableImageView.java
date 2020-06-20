@@ -91,7 +91,7 @@ public class ScalableImageView extends View implements GestureDetector.OnGesture
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        canvas.translate(offsetX, offsetY);
+        canvas.translate(offsetX * currentScale, offsetY * currentScale);
         float scale = smallScale + (bigScale - smallScale) * currentScale; // 当前缩放程度
         // 以屏幕中点为原点，做缩放，否则缩放后不会居中
         canvas.scale(scale, scale, getWidth() / 2f, getHeight() / 2f);
@@ -129,10 +129,7 @@ public class ScalableImageView extends View implements GestureDetector.OnGesture
         if (isBig) {
             offsetX -= scrollX;
             offsetY -= scrollY;
-            offsetX = Math.min(offsetX, (bitmap.getWidth() * bigScale - getWidth()) / 2); // 最大值是正
-            offsetX = Math.max(offsetX, -(bitmap.getWidth() * bigScale - getWidth()) / 2); // 最小值是负
-            offsetY = Math.min(offsetY, (bitmap.getHeight() * bigScale - getHeight()) / 2);
-            offsetY = Math.max(offsetY, -(bitmap.getHeight() * bigScale - getHeight()) / 2);
+            fixOffsets();
             invalidate();
         }
         return false;
@@ -171,10 +168,20 @@ public class ScalableImageView extends View implements GestureDetector.OnGesture
         if (isBig) {
             getScaleAnimator().reverse(); // 缩小动画
         } else {
+            offsetX = (motionEvent.getX() - getWidth() / 2f) - (motionEvent.getX() - getWidth() / 2f) * bigScale / smallScale;
+            offsetY = (motionEvent.getY() - getHeight() / 2f) - (motionEvent.getY() - getHeight() / 2f) * bigScale / smallScale;
+            fixOffsets();
             getScaleAnimator().start(); // 放大动画
         }
         isBig = !isBig;
         return false;
+    }
+
+    private void fixOffsets() {
+        offsetX = Math.min(offsetX, (bitmap.getWidth() * bigScale - getWidth()) / 2); // 最大值是正
+        offsetX = Math.max(offsetX, -(bitmap.getWidth() * bigScale - getWidth()) / 2); // 最小值是负
+        offsetY = Math.min(offsetY, (bitmap.getHeight() * bigScale - getHeight()) / 2);
+        offsetY = Math.max(offsetY, -(bitmap.getHeight() * bigScale - getHeight()) / 2);
     }
 
     @Override
